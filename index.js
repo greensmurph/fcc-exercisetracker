@@ -26,6 +26,7 @@ let User = mongoose.model('User', userSchema);
 
 const logSchema = new mongoose.Schema({
   userId: { type: String, required: true },
+  username: String,
   description: String,
   duration: Number,
   date: Date
@@ -41,86 +42,85 @@ app.get('/', (req, res) => {
 
 app.route('/api/users')
   .post(async (req, res) => {
-    try {
-      let username = req.body.username;
-      let existingUser = await User.findOne({ username });
-  
-      if (username === "") res.json({error: "Username required"});
-      if (existingUser) return res.json(existingUser)
-  
-      let user = await User.create({ username });
-      res.json(user);
-    } catch (error) { res.json({ error: error.message })};
+    let username = req.body.username;
+    let newUser = await User.create({username});
+    newUser.save((err, user) => {
+      if (err) res.send("User not found");
+      res.send({username: newUser.username, _id: newUser._id})
+    })
+    
   })
   .get(async (req, res) => {
-    try {
-      let allUsers = await User.find();
-      res.json(allUsers);
-    } catch (error) { res.json({ error: error.message })};
+    await User.find().select('username _id').exec((err, users) => {
+      if(err) return res.send("No users");
+      res.send(users);
+    })
   }
 );
 
 app.post('/api/users/:_id/exercises', async (req, res) => {
-  let userId = req.params._id;
-  let description = req.body.description;
-  let duration = parseInt(req.body.duration);
-  let date = req.body.date;
   try {
-    let user = await User.findById(userId);
-    if (!user) return res.json({error:  "User ID not found"});
-    const newLog = await Log.create({
-      userId,
-      description,
-      duration,
-      date: date ? new Date(date) : new Date()
-    });
-    const log = await newLog.save();
-    res.json({
-      _id: user._id,
+    const user = await User.findById(req.params._id);
+    if (!user) {
+      res.end("User not found");
+    }
+
+    let reqDate = new Date(req.body.date).toDateString();
+
+    //reqDate == null ? new Date().toDateString() : new Date(req.body.date).toDateString();
+
+    console.log('reqDate: ', reqDate)
+
+    const log = new Log({
+      userId: req.params._id,
       username: user.username,
+      description: req.body.description,
+      duration: Number(req.body.duration),
+      date: reqDate
+    });
+    console.log('log.date: ', log.date)
+
+    // the log.date is converted to 1989-12-31T06:00:00.000Z
+
+    await log.save();
+
+    res.json({
+      username: log.username,
       description: log.description,
       duration: log.duration,
-      date: new Date(log.date).toUTCString()
+      date: reqDate,
+      _id: req.params._id
     });
-  } catch (error) { res.json({ error: error.message })};
+  } catch (error) {
+    res.json({error: error.message});
+  }
 });
 
 app.get('/api/users/:_id/logs', async (req, res) => {
-  const { from, to, limit } = req.query;
-  let userId = req.params._id;
-  let user = await User.findById(userId);
+  const user = await User.findById(req.params._id);
+  const limit = Number(req.query.limit) || 0;
+  const from = req.query.from || new Date(0);
+  const to = req.query.to || new Date(Date.now());
 
-  if (!user) {
-    return res.json({ error: "User ID not found"});
-  }
+  const log = await Log.find({
+    userId: req.params._id,
+    date: { $gte: from, $lte: to }
+  }).select("-_id -userId -__v").limit(limit);
 
-  let dateObj = {};
-  if (from) {
-    dateObj["$gte"] = new Date(from);
-  }
-  if (to) {
-    dateObj["$lte"] = new Date(to);
-  }
-
-  let filter = {userId};
-  if (from || to) {
-    filter.date = dateObj;
-  }
-
-  const exercises = await Log.find(filter)
-    .limit(+limit ?? 999);
-
-  const count = exercises.length;
-
-  const log = exercises.map((exercise) => ({
-    description: exercise.description,
-    duration: exercise.duration,
-    date: exercise.date.toDateString(),
+  let logs = log.map((item) => ({
+    description: item.description,
+    duration: item.duration,
+    date: new Date(item.date).toDateString()
   }));
 
+  res.json({
+    _id: req.params._id,
+    username: user.username,
+    count: log.length,
+    log: logs
+  })
+
 });
-
-
 
 const listener = app.listen(process.env.PORT || 3000, () => {
   console.log('Your app is listening on port ' + listener.address().port)
